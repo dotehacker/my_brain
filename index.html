@@ -59,17 +59,49 @@
         const classifier = await pipeline('token-classification', 'Xenova/bert-base-NER');
         let tasks = [];
 
-        // CSV Handling
-        async function loadCSV() {
-            const response = await fetch('tasks.csv');
-            if (!response.ok) {
-                // Create initial CSV if not exists
-                const initialCSV = 'Task,Entities\n';
-                await saveCSV(initialCSV);
+        // File System Access for local CSV
+        async function readLocalCSV() {
+            try {
+                const [fileHandle] = await window.showOpenFilePicker({
+                    types: [{
+                        description: 'CSV Files',
+                        accept: {
+                            'text/csv': ['.csv']
+                        }
+                    }],
+                    multiple: false
+                });
+                const file = await fileHandle.getFile();
+                const content = await file.text();
+                return parseCSV(content);
+            } catch (error) {
+                console.log('No file selected or error reading file:', error);
                 return [];
             }
-            const csvText = await response.text();
-            return parseCSV(csvText);
+        }
+
+        async function writeLocalCSV(tasks) {
+            try {
+                const csvContent = ['Task,Entities', ...tasks.map(task => 
+                    `"${task.task.replace(/"/g, '""')}","${JSON.stringify(task.entities).replace(/"/g, '""')}"`
+                )].join('\n');
+
+                const fileHandle = await window.showSaveFilePicker({
+                    suggestedName: 'tasks.csv',
+                    types: [{
+                        description: 'CSV File',
+                        accept: {
+                            'text/csv': ['.csv']
+                        }
+                    }]
+                });
+
+                const writable = await fileHandle.createWritable();
+                await writable.write(csvContent);
+                await writable.close();
+            } catch (error) {
+                console.error('Error writing CSV:', error);
+            }
         }
 
         function parseCSV(csvText) {
@@ -78,29 +110,14 @@
             const parsedTasks = lines.slice(1)
                 .filter(line => line.trim() !== '')
                 .map(line => {
-                    const values = line.split(',');
+                    // Handle CSV with possible quoted fields
+                    const fields = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g);
                     return {
-                        task: values[0],
-                        entities: JSON.parse(values[1] || '{}')
+                        task: fields[0].replace(/^"|"$/g, ''),
+                        entities: JSON.parse(fields[1].replace(/^"|"$/g, ''))
                     };
                 });
             return parsedTasks;
-        }
-
-        async function saveCSV(csvContent) {
-            const blob = new Blob([csvContent], { type: 'text/csv' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = 'tasks.csv';
-            link.click();
-        }
-
-        async function updateCSV(tasks) {
-            const csvLines = ['Task,Entities', ...tasks.map(task => 
-                `${task.task},${JSON.stringify(task.entities)}`
-            )];
-            const csvContent = csvLines.join('\n');
-            await saveCSV(csvContent);
         }
 
         // NER Processing
@@ -129,8 +146,21 @@
 
             updateTaskTable();
             renderGraph(tasks[tasks.length - 1]);
-            updateCSV(tasks);
+            await writeLocalCSV(tasks);
         }
+
+        // Event Listener for CSV Upload
+        document.getElementById('csvUpload').addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const content = await file.text();
+                tasks = parseCSV(content);
+                updateTaskTable();
+                if (tasks.length > 0) {
+                    renderGraph(tasks[tasks.length - 1]);
+                }
+            }
+        });
 
         // Table Rendering
         function updateTaskTable() {
@@ -143,10 +173,10 @@
             `).join('');
         }
 
-        // Network Graph Rendering
+        // Network Graph Rendering (Same as previous implementation)
         function renderGraph(task) {
             const graphEl = document.getElementById('graph');
-            graphEl.innerHTML = ''; // Clear previous graph
+            graphEl.innerHTML = '';
 
             const width = 600;
             const height = 400;
@@ -246,16 +276,8 @@
             }
         }
 
-        // Initial load
-        async function init() {
-            tasks = await loadCSV();
-            updateTaskTable();
-            if (tasks.length > 0) {
-                renderGraph(tasks[tasks.length - 1]);
-            }
-        }
-
-        init();
+        // Initial CSV load handling
+        document.getElementById('csvUpload').click();
     </script>
 </body>
 </html>
