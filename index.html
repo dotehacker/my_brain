@@ -37,7 +37,7 @@
     
     <input type="file" id="csvUpload" accept=".csv">
     <input type="text" id="taskInput" placeholder="Enter task details">
-    <button onclick="processTask()">Process Task</button>
+    <button id="processButton">Process Task</button>
     
     <h2>Tasks and Entities</h2>
     <table id="taskTable">
@@ -59,222 +59,229 @@
         const classifier = await pipeline('token-classification', 'Xenova/bert-base-NER');
         let tasks = [];
 
-        // File System Access for local CSV
-        async function readLocalCSV() {
-            try {
-                const [fileHandle] = await window.showOpenFilePicker({
-                    types: [{
-                        description: 'CSV Files',
-                        accept: {
-                            'text/csv': ['.csv']
-                        }
-                    }],
-                    multiple: false
-                });
-                const file = await fileHandle.getFile();
-                const content = await file.text();
-                return parseCSV(content);
-            } catch (error) {
-                console.log('No file selected or error reading file:', error);
-                return [];
-            }
-        }
-
-        async function writeLocalCSV(tasks) {
-            try {
-                const csvContent = ['Task,Entities', ...tasks.map(task => 
-                    `"${task.task.replace(/"/g, '""')}","${JSON.stringify(task.entities).replace(/"/g, '""')}"`
-                )].join('\n');
-
-                const fileHandle = await window.showSaveFilePicker({
-                    suggestedName: 'tasks.csv',
-                    types: [{
-                        description: 'CSV File',
-                        accept: {
-                            'text/csv': ['.csv']
-                        }
-                    }]
-                });
-
-                const writable = await fileHandle.createWritable();
-                await writable.write(csvContent);
-                await writable.close();
-            } catch (error) {
-                console.error('Error writing CSV:', error);
-            }
-        }
-
-        function parseCSV(csvText) {
-            const lines = csvText.split('\n');
-            const headers = lines[0].split(',');
-            const parsedTasks = lines.slice(1)
-                .filter(line => line.trim() !== '')
-                .map(line => {
-                    // Handle CSV with possible quoted fields
-                    const fields = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g);
-                    return {
-                        task: fields[0].replace(/^"|"$/g, ''),
-                        entities: JSON.parse(fields[1].replace(/^"|"$/g, ''))
-                    };
-                });
-            return parsedTasks;
-        }
-
-        // NER Processing
-        async function processNER(text) {
-            const output = await classifier(text, { ignore_labels: [] });
-            const entities = {};
-            
-            output.forEach(item => {
-                if (item.entity.startsWith('B-') || item.entity.startsWith('I-')) {
-                    const entityType = item.entity.split('-')[1];
-                    if (!entities[entityType]) entities[entityType] = [];
-                    entities[entityType].push(item.word);
+        // Expose functions globally
+        window.NERProcessor = {
+            // File System Access for local CSV
+            async readLocalCSV() {
+                try {
+                    const [fileHandle] = await window.showOpenFilePicker({
+                        types: [{
+                            description: 'CSV Files',
+                            accept: {
+                                'text/csv': ['.csv']
+                            }
+                        }],
+                        multiple: false
+                    });
+                    const file = await fileHandle.getFile();
+                    const content = await file.text();
+                    return this.parseCSV(content);
+                } catch (error) {
+                    console.log('No file selected or error reading file:', error);
+                    return [];
                 }
-            });
+            },
 
-            return entities;
-        }
+            async writeLocalCSV(tasks) {
+                try {
+                    const csvContent = ['Task,Entities', ...tasks.map(task => 
+                        `"${task.task.replace(/"/g, '""')}","${JSON.stringify(task.entities).replace(/"/g, '""')}"`
+                    )].join('\n');
 
-        // Task Processing
-        async function processTask() {
-            const taskInput = document.getElementById('taskInput').value;
-            if (!taskInput) return;
+                    const fileHandle = await window.showSaveFilePicker({
+                        suggestedName: 'tasks.csv',
+                        types: [{
+                            description: 'CSV File',
+                            accept: {
+                                'text/csv': ['.csv']
+                            }
+                        }]
+                    });
 
-            const entities = await processNER(taskInput);
-            tasks.push({ task: taskInput, entities });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(csvContent);
+                    await writable.close();
+                } catch (error) {
+                    console.error('Error writing CSV:', error);
+                }
+            },
 
-            updateTaskTable();
-            renderGraph(tasks[tasks.length - 1]);
-            await writeLocalCSV(tasks);
-        }
+            parseCSV(csvText) {
+                const lines = csvText.split('\n');
+                const headers = lines[0].split(',');
+                const parsedTasks = lines.slice(1)
+                    .filter(line => line.trim() !== '')
+                    .map(line => {
+                        // Handle CSV with possible quoted fields
+                        const fields = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g);
+                        return {
+                            task: fields[0].replace(/^"|"$/g, ''),
+                            entities: JSON.parse(fields[1].replace(/^"|"$/g, ''))
+                        };
+                    });
+                return parsedTasks;
+            },
 
-        // Event Listener for CSV Upload
+            // NER Processing
+            async processNER(text) {
+                const output = await classifier(text, { ignore_labels: [] });
+                const entities = {};
+                
+                output.forEach(item => {
+                    if (item.entity.startsWith('B-') || item.entity.startsWith('I-')) {
+                        const entityType = item.entity.split('-')[1];
+                        if (!entities[entityType]) entities[entityType] = [];
+                        entities[entityType].push(item.word);
+                    }
+                });
+
+                return entities;
+            },
+
+            // Task Processing
+            async processTask() {
+                const taskInput = document.getElementById('taskInput').value;
+                if (!taskInput) return;
+
+                const entities = await this.processNER(taskInput);
+                tasks.push({ task: taskInput, entities });
+
+                this.updateTaskTable();
+                this.renderGraph(tasks[tasks.length - 1]);
+                await this.writeLocalCSV(tasks);
+            },
+
+            // Table Rendering
+            updateTaskTable() {
+                const tableBody = document.getElementById('taskTableBody');
+                tableBody.innerHTML = tasks.map(task => `
+                    <tr>
+                        <td>${task.task}</td>
+                        <td>${JSON.stringify(task.entities)}</td>
+                    </tr>
+                `).join('');
+            },
+
+            // Network Graph Rendering
+            renderGraph(task) {
+                const graphEl = document.getElementById('graph');
+                graphEl.innerHTML = '';
+
+                const width = 600;
+                const height = 400;
+
+                const svg = d3.select('#graph')
+                    .append('svg')
+                    .attr('width', width)
+                    .attr('height', height);
+
+                const simulation = d3.forceSimulation()
+                    .force('link', d3.forceLink().id(d => d.id))
+                    .force('charge', d3.forceManyBody())
+                    .force('center', d3.forceCenter(width / 2, height / 2));
+
+                const nodes = [
+                    { id: task.task, type: 'task' },
+                    ...Object.entries(task.entities).flatMap(([type, words]) => [
+                        { id: type, type: 'entity-type' },
+                        ...words.map(word => ({ id: word, type: 'word' }))
+                    ])
+                ];
+
+                const links = [
+                    ...Object.entries(task.entities).flatMap(([type, words]) => [
+                        { source: task.task, target: type },
+                        ...words.map(word => ({ source: type, target: word }))
+                    ])
+                ];
+
+                const link = svg.append('g')
+                    .selectAll('line')
+                    .data(links)
+                    .enter().append('line')
+                    .attr('stroke', '#999')
+                    .attr('stroke-opacity', 0.6);
+
+                const node = svg.append('g')
+                    .selectAll('circle')
+                    .data(nodes)
+                    .enter().append('circle')
+                    .attr('r', 10)
+                    .attr('fill', d => {
+                        if (d.type === 'task') return 'blue';
+                        if (d.type === 'entity-type') return 'green';
+                        return 'red';
+                    })
+                    .call(d3.drag()
+                        .on('start', dragstarted)
+                        .on('drag', dragged)
+                        .on('end', dragended));
+
+                const labels = svg.append('g')
+                    .selectAll('text')
+                    .data(nodes)
+                    .enter().append('text')
+                    .text(d => d.id)
+                    .attr('font-size', 10)
+                    .attr('dx', 12)
+                    .attr('dy', 4);
+
+                simulation
+                    .nodes(nodes)
+                    .on('tick', () => {
+                        link
+                            .attr('x1', d => d.source.x)
+                            .attr('y1', d => d.source.y)
+                            .attr('x2', d => d.target.x)
+                            .attr('y2', d => d.target.y);
+
+                        node
+                            .attr('cx', d => d.x)
+                            .attr('cy', d => d.y);
+
+                        labels
+                            .attr('x', d => d.x)
+                            .attr('y', d => d.y);
+                    });
+
+                simulation.force('link')
+                    .links(links);
+
+                function dragstarted(event, d) {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    d.fx = d.x;
+                    d.fy = d.y;
+                }
+
+                function dragged(event, d) {
+                    d.fx = event.x;
+                    d.fy = event.y;
+                }
+
+                function dragended(event, d) {
+                    if (!event.active) simulation.alphaTarget(0);
+                    d.fx = null;
+                    d.fy = null;
+                }
+            }
+        };
+
+        // Setup event listeners after page load
+        document.getElementById('processButton').addEventListener('click', () => {
+            window.NERProcessor.processTask();
+        });
+
         document.getElementById('csvUpload').addEventListener('change', async (event) => {
             const file = event.target.files[0];
             if (file) {
                 const content = await file.text();
-                tasks = parseCSV(content);
-                updateTaskTable();
+                tasks = window.NERProcessor.parseCSV(content);
+                window.NERProcessor.updateTaskTable();
                 if (tasks.length > 0) {
-                    renderGraph(tasks[tasks.length - 1]);
+                    window.NERProcessor.renderGraph(tasks[tasks.length - 1]);
                 }
             }
         });
-
-        // Table Rendering
-        function updateTaskTable() {
-            const tableBody = document.getElementById('taskTableBody');
-            tableBody.innerHTML = tasks.map(task => `
-                <tr>
-                    <td>${task.task}</td>
-                    <td>${JSON.stringify(task.entities)}</td>
-                </tr>
-            `).join('');
-        }
-
-        // Network Graph Rendering (Same as previous implementation)
-        function renderGraph(task) {
-            const graphEl = document.getElementById('graph');
-            graphEl.innerHTML = '';
-
-            const width = 600;
-            const height = 400;
-
-            const svg = d3.select('#graph')
-                .append('svg')
-                .attr('width', width)
-                .attr('height', height);
-
-            const simulation = d3.forceSimulation()
-                .force('link', d3.forceLink().id(d => d.id))
-                .force('charge', d3.forceManyBody())
-                .force('center', d3.forceCenter(width / 2, height / 2));
-
-            const nodes = [
-                { id: task.task, type: 'task' },
-                ...Object.entries(task.entities).flatMap(([type, words]) => [
-                    { id: type, type: 'entity-type' },
-                    ...words.map(word => ({ id: word, type: 'word' }))
-                ])
-            ];
-
-            const links = [
-                ...Object.entries(task.entities).flatMap(([type, words]) => [
-                    { source: task.task, target: type },
-                    ...words.map(word => ({ source: type, target: word }))
-                ])
-            ];
-
-            const link = svg.append('g')
-                .selectAll('line')
-                .data(links)
-                .enter().append('line')
-                .attr('stroke', '#999')
-                .attr('stroke-opacity', 0.6);
-
-            const node = svg.append('g')
-                .selectAll('circle')
-                .data(nodes)
-                .enter().append('circle')
-                .attr('r', 10)
-                .attr('fill', d => {
-                    if (d.type === 'task') return 'blue';
-                    if (d.type === 'entity-type') return 'green';
-                    return 'red';
-                })
-                .call(d3.drag()
-                    .on('start', dragstarted)
-                    .on('drag', dragged)
-                    .on('end', dragended));
-
-            const labels = svg.append('g')
-                .selectAll('text')
-                .data(nodes)
-                .enter().append('text')
-                .text(d => d.id)
-                .attr('font-size', 10)
-                .attr('dx', 12)
-                .attr('dy', 4);
-
-            simulation
-                .nodes(nodes)
-                .on('tick', () => {
-                    link
-                        .attr('x1', d => d.source.x)
-                        .attr('y1', d => d.source.y)
-                        .attr('x2', d => d.target.x)
-                        .attr('y2', d => d.target.y);
-
-                    node
-                        .attr('cx', d => d.x)
-                        .attr('cy', d => d.y);
-
-                    labels
-                        .attr('x', d => d.x)
-                        .attr('y', d => d.y);
-                });
-
-            simulation.force('link')
-                .links(links);
-
-            function dragstarted(event, d) {
-                if (!event.active) simulation.alphaTarget(0.3).restart();
-                d.fx = d.x;
-                d.fy = d.y;
-            }
-
-            function dragged(event, d) {
-                d.fx = event.x;
-                d.fy = event.y;
-            }
-
-            function dragended(event, d) {
-                if (!event.active) simulation.alphaTarget(0);
-                d.fx = null;
-                d.fy = null;
-            }
-        }
 
         // Initial CSV load handling
         document.getElementById('csvUpload').click();
